@@ -1,0 +1,42 @@
+# Python/Flask Backend
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env
+*.sqlite3
+
+# Node.js/React Frontend
+node_modules/
+build/
+dist/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# IDE/Editor files
+.idea/
+*.sublime-workspace
+*.sublime-project
+.vscode/
+
+# Miscellaneous
+*.swp
+*~
+# Ignore macOS thumbnail cache
+Thumbs.db
+
+# Local configuration files (if any)
+config.local.yaml
+local_settings.py
