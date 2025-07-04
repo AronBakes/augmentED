@@ -7,3 +7,4 @@ openai==1.37.0
 Flask-Migrate==4.0.7
 Flask-Cors==4.0.1
 httpx==0.27.0
+gunicorn==22.0.0
