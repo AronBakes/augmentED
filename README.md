@@ -56,9 +56,14 @@ This is a web application that helps students with their studies. It includes fe
     ```
 
 8.  **Start the backend server:**
-    ```bash
-    gunicorn --bind 0.0.0.0:5000 app:app
-    ```
+    *   **For development:**
+        ```bash
+        python app.py
+        ```
+    *   **For production:**
+        ```bash
+        gunicorn --bind 0.0.0.0:5000 app:app
+        ```
 
 ### Frontend Setup
 
