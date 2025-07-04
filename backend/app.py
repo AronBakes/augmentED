@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 import os
 from openai import OpenAI
 import json
+import traceback
 
 # Unset proxy environment variables to prevent httpx from picking them up
 for var in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY']:
@@ -266,13 +267,20 @@ def upload_transcript():
         print(f"Processed lines: {lines}")
 
         semesters = []
-        units = []
-        grades = []
+        courses_data = [] # Store (semester, code, name, grade)
         current_semester = None
 
         semester_regex = re.compile(r"Semester (\d|Summer), (\d{4})")
-        unit_code_regex = re.compile(r"^[A-Z]{3}\d{3}\.\d$")
-        grade_regex = re.compile(r"^(\d+)$")
+        unit_code_pattern = r"^[A-Z]{3}\d{3}\.\d$"
+        unit_code_regex = re.compile(unit_code_pattern)
+
+        grade_mapping = {
+            "High Distinction": 7,
+            "Distinction": 6,
+            "Credit": 5,
+            "Pass": 4,
+            "Fail": 3
+        }
 
         i = 0
         while i < len(lines):
@@ -285,57 +293,67 @@ def upload_transcript():
                 i += 1
                 continue
 
-            unit_match = unit_code_regex.match(line)
-            if unit_match:
-                units.append((current_semester, line))
-                print(f"Detected unit: {line} in {current_semester}")
-                i += 1
-                if i < len(lines):
-                    next_line = lines[i].strip()
-                    grade_match = grade_regex.match(next_line)
-                    if grade_match:
-                        grades.append(int(grade_match.group(1)))
-                        print(f"Detected grade: {grade_match.group(1)} for unit {line}")
-                    elif "Enrolled" in next_line or "-" in next_line:
-                        grades.append(None)
-                        print(f"No grade (Enrolled) for unit {line}")
+            unit_code_match = unit_code_regex.match(line)
+            if unit_code_match:
+                code = line
+                name = "TBD" # Default name, can be improved with more complex parsing
+                grade = None
+                
+                # Attempt to get unit name (next line)
+                if i + 1 < len(lines):
+                    name = lines[i+1].strip()
+                
+                # Attempt to get grade (3 lines after unit code)
+                if i + 3 < len(lines):
+                    grade_text = lines[i+3].strip()
+                    if grade_text in grade_mapping:
+                        grade = grade_mapping[grade_text]
+                        print(f"Detected grade: {grade_text} ({grade}) for unit {code}")
+                    elif "Enrolled" in grade_text or "-" in grade_text:
+                        grade = None
+                        print(f"No grade (Enrolled) for unit {code}")
                     else:
-                        grades.append(None)
-                i += 1
+                        print(f"Could not map grade '{grade_text}' for unit {code}. Setting to None.")
+                        grade = None # Grade not in mapping or "Enrolled"
+                else:
+                    print(f"Not enough lines to detect grade for unit {code}. Setting to None.")
+                    grade = None
+
+                courses_data.append((current_semester, code, name, grade))
+                print(f"Detected course data: Semester: {current_semester}, Code: {code}, Name: {name}, Grade: {grade}")
+                
+                # Advance index past unit code, name, credit points, and grade
+                i += 4 
                 continue
             i += 1
 
-        valid_units = [u for u in units if grades[units.index(u)] is not None]
-        grades = [g for g in grades if g is not None]
-
-        print(f"Units: {valid_units}")
-        print(f"Grades: {grades}")
-
-        if len(valid_units) != len(grades):
-            return jsonify({"message": f"Mismatch: {len(valid_units)} units but {len(grades)} grades found"}), 400
-
+        # Clear existing courses before adding new ones from transcript
         db.session.query(Course).delete()
         db.session.commit()
 
-        for (semester, code), grade in zip(valid_units, grades):
-            semester_num, year = semester.split(", ")
-            course = Course(
-                code=code,
-                name="TBD",
-                grade=grade,
-                year=int(year),
-                semester=f"Semester {semester_num}"
-            )
-            db.session.add(course)
-            print(f"Added course: {course.to_dict()}")
+        for semester_str, code, name, grade in courses_data:
+            if semester_str and code: # Ensure we have valid data
+                semester_num, year = semester_str.split(", ")
+                course = Course(
+                    code=code,
+                    name=name,
+                    grade=grade,
+                    year=int(year),
+                    semester=f"Semester {semester_num}"
+                )
+                db.session.add(course)
+                print(f"Added course to DB: {course.to_dict()}")
 
         db.session.commit()
+        print(f"Courses in session before commit: {db.session.new}")
+        print(f"Courses in session after commit: {Course.query.count()}")
         return jsonify({"message": "Transcript uploaded and courses updated successfully"}), 200
 
     except fitz.fitz.FileDataError:
         return jsonify({"message": "Invalid or corrupted PDF file"}), 400
     except Exception as e:
         print(f"Exception details: {str(e)}")
+        traceback.print_exc()
         return jsonify({"message": f"Error processing PDF: {str(e)}"}), 500
 
 @app.route("/api/course/<int:course_id>/study_sessions", methods=['POST'])
@@ -658,6 +676,117 @@ def grade_assessment():
     except Exception as e:
         return jsonify({"message": f"AI error: {str(e)}"}), 500
 
+
+@app.route("/api/export_data", methods=['GET'])
+def export_data():
+    try:
+        data = {
+            "courses": [c.to_dict() for c in Course.query.all()],
+            "assessments": [a.to_dict() for a in Assessment.query.all()],
+            "study_sessions": [s.to_dict() for s in StudySession.query.all()],
+            "generated_questions": [q.to_dict() for q in GeneratedQuestion.query.all()],
+            "user_answers": [ua.to_dict() for ua in UserAnswer.query.all()]
+        }
+        return jsonify(data), 200
+    except Exception as e:
+        return jsonify({"message": f"Error exporting data: {str(e)}"}), 500
+
+@app.route("/api/import_data", methods=['POST'])
+def import_data():
+    data = request.get_json()
+    if not data:
+        return jsonify({"message": "No data provided for import"}), 400
+
+    try:
+        # Clear existing data (optional, depending on desired import behavior)
+        # For simplicity, we'll clear and re-add. More complex merge logic can be added.
+        db.session.query(UserAnswer).delete()
+        db.session.query(GeneratedQuestion).delete()
+        db.session.query(StudySession).delete()
+        db.session.query(Assessment).delete()
+        db.session.query(Course).delete()
+        db.session.commit()
+
+        # Import Courses
+        for item in data.get("courses", []):
+            try:
+                course = Course(**item)
+                db.session.add(course)
+            except Exception as e:
+                print(f"Error importing course {item.get('id')}: {str(e)}")
+                raise # Re-raise to ensure rollback
+        db.session.commit()
+
+        # Import Assessments
+        for item in data.get("assessments", []):
+            try:
+                assessment = Assessment(**item)
+                db.session.add(assessment)
+            except Exception as e:
+                print(f"Error importing assessment {item.get('id')}: {str(e)}")
+                raise
+        db.session.commit()
+
+        # Import Study Sessions
+        for item in data.get("study_sessions", []):
+            try:
+                # Handle datetime conversion if necessary
+                if 'date_logged' in item:
+                    item['date_logged'] = datetime.fromisoformat(item['date_logged'])
+                study_session = StudySession(**item)
+                db.session.add(study_session)
+            except Exception as e:
+                print(f"Error importing study session {item.get('id')}: {str(e)}")
+                raise
+        db.session.commit()
+
+        # Import Generated Questions
+        for item in data.get("generated_questions", []):
+            try:
+                if 'generated_at' in item:
+                    item['generated_at'] = datetime.fromisoformat(item['generated_at'])
+                question = GeneratedQuestion(**item)
+                db.session.add(question)
+            except Exception as e:
+                print(f"Error importing generated question {item.get('id')}: {str(e)}")
+                raise
+        db.session.commit()
+
+        # Import User Answers
+        for item in data.get("user_answers", []):
+            try:
+                if 'answered_at' in item:
+                    item['answered_at'] = datetime.fromisoformat(item['answered_at'])
+                answer = UserAnswer(**item)
+                db.session.add(answer)
+            except Exception as e:
+                print(f"Error importing user answer {item.get('id')}: {str(e)}")
+                raise
+        db.session.commit()
+
+        return jsonify({"message": "Data imported successfully"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"message": f"Error importing data: {str(e)}"}), 500
+
+@app.route("/api/reset_all_data", methods=['POST'])
+def reset_all_data():
+    try:
+        db.session.query(UserAnswer).delete()
+        db.session.query(GeneratedQuestion).delete()
+        db.session.query(StudySession).delete()
+        db.session.query(Assessment).delete()
+        db.session.query(Course).delete()
+        db.session.commit()
+        return jsonify({"message": "All data reset successfully"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"message": f"Error resetting data: {str(e)}"}), 500
+
+@app.route("/api/debug_courses")
+def debug_courses():
+    all_courses = Course.query.all()
+    return jsonify(courses=[c.to_dict() for c in all_courses])
 
 if __name__ == '__main__':
     app.run(debug=True)

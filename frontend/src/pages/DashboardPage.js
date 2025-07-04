@@ -15,8 +15,8 @@ function DashboardPage() {
         if (!gpaRes.ok) throw new Error(`Failed to fetch GPA summary: ${gpaRes.status}`);
         const gpaData = await gpaRes.json();
         console.log('Dashboard GPA summary response:', gpaData);
-        setCoursesCompleted(gpaData.completed_courses);
-        setGpa(gpaData.gpa.toFixed(2));
+        setCoursesCompleted(gpaData.completed_units);
+        setGpa(gpaData.current_gpa.toFixed(2));
 
         // Fetch study time from /api/sessions
         const sessionsRes = await fetch('http://localhost:5000/api/sessions');

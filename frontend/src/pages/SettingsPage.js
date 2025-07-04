@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Container, Row, Col, Card, Form, Button } from 'react-bootstrap';
+import axios from 'axios';
 
 function SettingsPage() {
   const [primaryColor, setPrimaryColor] = useState('#FF6384'); // Default red
@@ -10,6 +11,11 @@ function SettingsPage() {
   const [studyRemindersEnabled, setStudyRemindersEnabled] = useState(false);
   const [assessmentAlertsEnabled, setAssessmentAlertsEnabled] = useState(false);
   const [gpaDropAlertEnabled, setGpaDropAlertEnabled] = useState(false);
+  const fileInputRef = useRef(null);
+
+  const handleImportButtonClick = () => {
+    fileInputRef.current.click();
+  };
 
   useEffect(() => {
     const savedPrimaryColor = localStorage.getItem('primaryColor');
@@ -72,37 +78,58 @@ function SettingsPage() {
     alert('Notification settings saved successfully!');
   };
 
-  const handleExportData = () => {
-    const data = {};
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      try {
-        data[key] = JSON.parse(localStorage.getItem(key));
-      } catch (e) {
-        data[key] = localStorage.getItem(key);
-      }
+  const handleExportData = async () => {
+    try {
+      const response = await axios.get('http://localhost:5000/api/export_data');
+      const data = response.data;
+      const jsonString = `data:text/json;charset=utf-8,${encodeURIComponent(
+        JSON.stringify(data, null, 2)
+      )}`;
+      const link = document.createElement('a');
+      link.href = jsonString;
+      link.download = 'augmentED_data_backup.json';
+      link.click();
+      alert('Data exported successfully!');
+    } catch (error) {
+      alert(`Error exporting data: ${error.message}`);
     }
-    const jsonString = `data:text/json;charset=utf-8,${encodeURIComponent(
-      JSON.stringify(data, null, 2)
-    )}`;
-    const link = document.createElement('a');
-    link.href = jsonString;
-    link.download = 'augmentED_settings_backup.json';
-    link.click();
-    alert('Settings exported successfully!');
   };
 
-  const handleImportData = () => {
-    alert('Import Data functionality is coming soon!');
-    // Future implementation would involve a file input and parsing the JSON
+  const [importFile, setImportFile] = useState(null);
+
+  const handleFileChange = (event) => {
+    setImportFile(event.target.files[0]);
   };
 
-  const handleResetAllData = () => {
-    if (window.confirm('Are you sure you want to reset all settings? This action cannot be undone.')) {
-      localStorage.clear();
-      alert('All settings have been reset!');
-      // Optionally, reload the page to reflect default settings
-      window.location.reload();
+  const handleImportData = async () => {
+    if (!importFile) {
+      alert('Please select a JSON file to import.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const data = JSON.parse(e.target.result);
+        const response = await axios.post('http://localhost:5000/api/import_data', data);
+        alert(response.data.message);
+        window.location.reload();
+      } catch (error) {
+        alert(`Error importing data: ${error.message}`);
+      }
+    };
+    reader.readAsText(importFile);
+  };
+
+  const handleResetAllData = async () => {
+    if (window.confirm('Are you sure you want to reset all data? This action cannot be undone.')) {
+      try {
+        const response = await axios.post('http://localhost:5000/api/reset_all_data');
+        localStorage.clear(); // Clear local storage settings as well
+        alert(response.data.message);
+        window.location.reload();
+      } catch (error) {
+        alert(`Error resetting data: ${error.message}`);
+      }
     }
   };
 
@@ -218,7 +245,14 @@ function SettingsPage() {
             <Card.Body>
               <Button variant="primary" onClick={handleExportData} className="mb-2">Export Data</Button>
               <br />
-              <Button variant="secondary" onClick={handleImportData} className="mb-2">Import Data</Button>
+              <input
+                type="file"
+                accept=".json"
+                onChange={handleFileChange}
+                style={{ display: 'none' }} // Hide the input
+                ref={fileInputRef}
+              />
+              <Button variant="secondary" onClick={handleImportButtonClick} className="mb-2">Import Data</Button>
               <br />
               <Button variant="danger" onClick={handleResetAllData}>Reset All Data</Button>
             </Card.Body>

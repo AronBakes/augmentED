@@ -239,7 +239,7 @@ function GpaPage() {
     <Container fluid>
       <Row>
         <Col md={8}>
-          <h2 className="mb-4">Your GPA Tracker</h2>
+          <h2 className="mb-4">GPA Tracker</h2>
           <Accordion defaultActiveKey="0" alwaysOpen>
             {Object.entries(groupedCourses).sort((a, b) => b[0].localeCompare(a[0])).map(([group, courses]) => (
               <Accordion.Item eventKey={group} key={group}>
