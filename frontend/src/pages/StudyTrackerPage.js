@@ -234,6 +234,9 @@ function StudyTrackerPage() {
     const [sessions, setSessions] = useState([]);
     const [courses, setCourses] = useState([]);
     const [editSession, setEditSession] = useState(null);
+    const [showEditModal, setShowEditModal] = useState(false);
+    const [showDeleteModal, setShowDeleteModal] = useState(false);
+    const [selectedSession, setSelectedSession] = useState(null);
     const [selectedCourseId, setSelectedCourseId] = useState(null);
     const [assessments, setAssessments] = useState([]);
 
@@ -289,13 +292,22 @@ function StudyTrackerPage() {
         fetchData();
     }, []);
 
-    const handleCourseClick = (courseId) => {
-        setSelectedCourseId(courseId);
-        fetchAssessments(courseId);
+    const handleEditClick = (session) => {
+        setSelectedSession(session);
+        setEditSession({ ...session });
+        setShowEditModal(true);
     };
 
-    const handleEdit = (session) => {
-        setEditSession(session);
+    const handleDeleteClick = (session) => {
+        setSelectedSession(session);
+        setShowDeleteModal(true);
+    };
+
+    const handleCloseModals = () => {
+        setShowEditModal(false);
+        setShowDeleteModal(false);
+        setSelectedSession(null);
+        setEditSession(null);
     };
 
     const handleSaveEdit = async () => {
@@ -311,9 +323,8 @@ function StudyTrackerPage() {
                 }),
             });
             if (response.ok) {
-                setEditSession(null);
+                handleCloseModals();
                 fetchData();
-                alert('Session updated!');
             } else {
                 alert('Failed to update session.');
             }
@@ -323,27 +334,27 @@ function StudyTrackerPage() {
         }
     };
 
-    const handleDelete = async (sessionId) => {
-        if (window.confirm('Are you sure you want to delete this session?')) {
-            try {
-                const response = await fetch(`http://localhost:5000/api/session/${sessionId}`, {
-                    method: 'DELETE',
-                });
-                if (response.ok) {
-                    fetchData();
-                    alert('Session deleted!');
-                } else {
-                    alert('Failed to delete session.');
-                }
-            } catch (error) {
-                console.error('Error deleting session:', error);
-                alert('Error deleting session.');
+    const handleDeleteConfirm = async () => {
+        if (!selectedSession) return;
+        try {
+            const response = await fetch(`http://localhost:5000/api/session/${selectedSession.id}`, {
+                method: 'DELETE',
+            });
+            if (response.ok) {
+                handleCloseModals();
+                fetchData();
+            } else {
+                alert('Failed to delete session.');
             }
+        } catch (error) {
+            console.error('Error deleting session:', error);
+            alert('Error deleting session.');
         }
     };
 
     return (
-        <Container>
+        // <Container>
+        <Container className="narrow-container">
             <Row>
                 <Col md={5}>
                     <LogSessionForm courses={courses} onSessionLogged={fetchData} />
@@ -403,17 +414,17 @@ function StudyTrackerPage() {
                                     <td>{session.description}</td>
                                     <td>
                                         <Button
-                                            variant="warning"
+                                            variant="outline-light"
                                             size="sm"
-                                            onClick={() => handleEdit(session)}
+                                            onClick={() => handleEditClick(session)}
                                             className="me-2"
                                         >
                                             Edit
                                         </Button>
                                         <Button
-                                            variant="danger"
+                                            variant="outline-danger"
                                             size="sm"
-                                            onClick={() => handleDelete(session.id)}
+                                            onClick={() => handleDeleteClick(session)}
                                         >
                                             Delete
                                         </Button>
@@ -427,46 +438,61 @@ function StudyTrackerPage() {
                             )}
                         </tbody>
                     </Table>
-                    <Modal show={!!editSession} onHide={() => setEditSession(null)}>
+                    <Modal show={showEditModal} onHide={handleCloseModals} centered>
                         <Modal.Header closeButton>
                             <Modal.Title>Edit Study Session</Modal.Title>
                         </Modal.Header>
                         <Modal.Body>
-                            <Form>
-                                <Form.Group className="mb-3">
-                                    <Form.Label>Duration (minutes)</Form.Label>
-                                    <Form.Control
-                                        type="number"
-                                        value={editSession?.duration_minutes || 0}
-                                        onChange={(e) => setEditSession({ ...editSession, duration_minutes: parseInt(e.target.value) })}
-                                    />
-                                </Form.Group>
-                                <Form.Group className="mb-3">
-                                    <Form.Label>Break Duration (minutes)</Form.Label>
-                                    <Form.Control
-                                        type="number"
-                                        value={editSession?.break_duration || 0}
-                                        onChange={(e) => setEditSession({ ...editSession, break_duration: parseInt(e.target.value) })}
-                                    />
-                                </Form.Group>
-                                <Form.Group className="mb-3">
-                                    <Form.Label>Description</Form.Label>
-                                    <Form.Control
-                                        as="textarea"
-                                        rows={3}
-                                        value={editSession?.description || ''}
-                                        onChange={(e) => setEditSession({ ...editSession, description: e.target.value })}
-                                    />
-                                </Form.Group>
-                            </Form>
+                            {editSession && (
+                                <Form>
+                                    <Form.Group className="mb-3">
+                                        <Form.Label>Duration (minutes)</Form.Label>
+                                        <Form.Control
+                                            type="number"
+                                            value={editSession.duration_minutes || 0}
+                                            onChange={(e) => setEditSession({ ...editSession, duration_minutes: parseInt(e.target.value) })}
+                                        />
+                                    </Form.Group>
+                                    <Form.Group className="mb-3">
+                                        <Form.Label>Break Duration (minutes)</Form.Label>
+                                        <Form.Control
+                                            type="number"
+                                            value={editSession.break_duration || 0}
+                                            onChange={(e) => setEditSession({ ...editSession, break_duration: parseInt(e.target.value) })}
+                                        />
+                                    </Form.Group>
+                                    <Form.Group className="mb-3">
+                                        <Form.Label>Description</Form.Label>
+                                        <Form.Control
+                                            as="textarea"
+                                            rows={3}
+                                            value={editSession.description || ''}
+                                            onChange={(e) => setEditSession({ ...editSession, description: e.target.value })}
+                                        />
+                                    </Form.Group>
+                                </Form>
+                            )}
                         </Modal.Body>
                         <Modal.Footer>
-                            <Button variant="secondary" onClick={() => setEditSession(null)}>
+                            <Button variant="secondary" onClick={handleCloseModals}>
                                 Cancel
                             </Button>
                             <Button variant="primary" onClick={handleSaveEdit}>
                                 Save Changes
                             </Button>
+                        </Modal.Footer>
+                    </Modal>
+
+                    <Modal show={showDeleteModal} onHide={handleCloseModals} centered>
+                        <Modal.Header closeButton>
+                            <Modal.Title>Confirm Deletion</Modal.Title>
+                        </Modal.Header>
+                        <Modal.Body>
+                            Are you sure you want to delete this study session? This action cannot be undone.
+                        </Modal.Body>
+                        <Modal.Footer>
+                            <Button variant="secondary" onClick={handleCloseModals}>Cancel</Button>
+                            <Button variant="danger" onClick={handleDeleteConfirm}>Delete</Button>
                         </Modal.Footer>
                     </Modal>
                 </Col>

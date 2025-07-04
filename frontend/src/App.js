@@ -1,45 +1,52 @@
-import React from 'react';
+import React, { useState } from 'react';
 import './App.css'; // Keep this line
 import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import { Container, Nav, Navbar } from 'react-bootstrap';
+import Sidebar from './components/Sidebar'; // Import the new Sidebar component
 
 import DashboardPage from './pages/DashboardPage';
 import GpaPage from './pages/GpaPage';
 import StudyTrackerPage from './pages/StudyTrackerPage';
 import CourseDetailPage from './pages/CourseDetailPage';
 import AnalyticsPage from './pages/AnalyticsPage';
-import PracticePage from './pages/PracticePage'; // Import the new page
+import PracticePage from './pages/PracticePage';
+import SavedQuestionsPage from './pages/SavedQuestionsPage';
+import AIAssistedGraderPage from './pages/AIAssistedGraderPage'; // Import the new page
+import SettingsPage from './pages/SettingsPage';
 
 function App() {
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+
+  const toggleSidebar = () => {
+    setIsSidebarCollapsed(!isSidebarCollapsed);
+  };
+
   return (
     <Router>
-      <div className="App">
-        <Navbar bg="dark" variant="dark" expand="lg" className="Navbar">
-          <Container>
-            <Navbar.Brand as={Link} to="/">Project AugmentED</Navbar.Brand>
-            <Navbar.Toggle aria-controls="basic-navbar-nav" />
-            <Navbar.Collapse id="basic-navbar-nav">
-              <Nav className="me-auto">
-                <Nav.Link as={Link} to="/">Dashboard</Nav.Link>
-                <Nav.Link as={Link} to="/gpa">GPA Tracker</Nav.Link>
-                <Nav.Link as={Link} to="/study">Study Tracker</Nav.Link>
-                <Nav.Link as={Link} to="/analytics">Analytics</Nav.Link>
-                <Nav.Link as={Link} to="/practice">Practice</Nav.Link> {/* Add Practice link */}
-              </Nav>
-            </Navbar.Collapse>
-          </Container>
-        </Navbar>
+      <div className="App" style={{ display: 'flex', height: '100vh' }}>
+        {/* Sidebar */}
+        <div className={`sidebar ${isSidebarCollapsed ? 'collapsed' : ''}`}>
+          <button className="hamburger-button" onClick={toggleSidebar}>
+            ☰
+          </button>
+          <h3>AugmentED</h3>
+          <Sidebar isCollapsed={isSidebarCollapsed} />
+        </div>
 
-        <Container className="mt-4">
+        {/* Main Content Area */}
+        <div className="main-content" style={{ flexGrow: 1, padding: '20px', overflowY: 'auto' }}>
           <Routes>
             <Route path="/" element={<DashboardPage />} />
             <Route path="/gpa" element={<GpaPage />} />
             <Route path="/study" element={<StudyTrackerPage />} />
             <Route path="/course/:courseId" element={<CourseDetailPage />} />
             <Route path="/analytics" element={<AnalyticsPage />} />
-            <Route path="/practice" element={<PracticePage />} /> {/* Add Practice route */}
+            <Route path="/practice" element={<PracticePage />} />
+            <Route path="/saved-questions" element={<SavedQuestionsPage />} />
+            <Route path="/grader" element={<AIAssistedGraderPage />} /> {/* Add AI Assisted Grader route */}
+            <Route path="/settings" element={<SettingsPage />} />
           </Routes>
-        </Container>
+        </div>
       </div>
     </Router>
   );

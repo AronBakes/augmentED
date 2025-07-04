@@ -7,7 +7,13 @@ from flask_migrate import Migrate
 from flask_cors import CORS
 from dotenv import load_dotenv
 import os
-from openai import OpenAI  # Updated import
+from openai import OpenAI
+import json
+
+# Unset proxy environment variables to prevent httpx from picking them up
+for var in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY']:
+    if var in os.environ:
+        del os.environ[var]
 
 # Load environment variables
 load_dotenv()
@@ -19,8 +25,14 @@ db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 CORS(app, resources={r"/api/*": {"origins": "http://localhost:3000"}})
 
-# Configure OpenAI client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+import httpx
+
+# Configure xAI client
+client = OpenAI(
+  api_key=os.getenv("XAI_API_KEY"),
+  base_url="https://api.x.ai/v1",
+  http_client=httpx.Client(trust_env=False)
+)
 print("API Key loaded:", "Set" if client.api_key else "Not Set")  # Debug print
 
 # --- DATABASE MODELS ---
@@ -72,6 +84,50 @@ class StudySession(db.Model):
             "description": self.description,
             "date_logged": self.date_logged.isoformat(),
             "course_code": self.course.code
+        }
+
+class GeneratedQuestion(db.Model):
+    __tablename__ = 'generated_question'
+    id = db.Column(db.Integer, primary_key=True)
+    course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=False)
+    question_type = db.Column(db.String(50), nullable=False) # e.g., free_text, multiple_choice, numerical
+    question_text = db.Column(db.Text, nullable=False)
+    correct_answer = db.Column(db.Text, nullable=False)
+    working = db.Column(db.Text, nullable=True)
+    choices = db.Column(db.JSON, nullable=True) # For multiple choice questions
+    numerical_answer = db.Column(db.Numeric(10, 4), nullable=True) # For numerical questions
+    tolerance = db.Column(db.Numeric(10, 4), nullable=True) # For numerical questions
+    generated_at = db.Column(db.DateTime, nullable=False, default=datetime.now(UTC))
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "course_id": self.course_id,
+            "question_type": self.question_type,
+            "question_text": self.question_text,
+            "correct_answer": self.correct_answer,
+            "working": self.working,
+            "choices": self.choices,
+            "numerical_answer": float(self.numerical_answer) if self.numerical_answer is not None else None,
+            "tolerance": float(self.tolerance) if self.tolerance is not None else None,
+            "generated_at": self.generated_at.isoformat()
+        }
+
+class UserAnswer(db.Model):
+    __tablename__ = 'user_answer'
+    id = db.Column(db.Integer, primary_key=True)
+    question_id = db.Column(db.Integer, db.ForeignKey('generated_question.id'), nullable=False)
+    user_input = db.Column(db.Text, nullable=True)
+    is_correct = db.Column(db.Boolean, nullable=True)
+    answered_at = db.Column(db.DateTime, nullable=False, default=datetime.now(UTC))
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "question_id": self.question_id,
+            "user_input": self.user_input,
+            "is_correct": self.is_correct,
+            "answered_at": self.answered_at.isoformat()
         }
 
 # --- API ROUTES ---
@@ -338,50 +394,141 @@ def delete_study_session(session_id):
 
 @app.route("/api/gpa_summary", methods=['GET'])
 def get_gpa_summary():
-    # Group by code and take the highest grade for each course
     from sqlalchemy import func
-    subquery = db.session.query(
-        Course.code,
-        func.max(Course.grade).label('max_grade')
-    ).group_by(Course.code).subquery()
-    
-    # Count completed courses (max grade >= 4)
-    completed_courses = db.session.query(Course).join(
-        subquery, (Course.code == subquery.c.code) & (Course.grade == subquery.c.max_grade)
-    ).filter(Course.grade >= 4, Course.grade.isnot(None)).distinct(Course.code).count()
 
-    # Calculate GPA including all grades (1-7)
-    all_grades = [c.grade for c in Course.query.filter(Course.grade.isnot(None)).all()]
-    gpa = sum(all_grades) / len(all_grades) if all_grades else 0.0
+    # Get all courses with a grade (attempted units)
+    attempted_courses_data = db.session.query(Course).filter(Course.grade.isnot(None)).all()
+
+    print("--- Debugging GPA Calculation ---")
+    print(f"Total courses in DB: {db.session.query(Course).count()}")
+    print("Attempted courses data (code, grade):")
+    for c in attempted_courses_data:
+        print(f"  - {c.code}: {c.grade}")
+
+    # Count passed units (grade >= 4)
+    num_passed_units = sum(1 for c in attempted_courses_data if c.grade >= 4)
+
+    # Count all attempted units
+    num_attempted_units = len(attempted_courses_data)
+
+    # Total units for the degree (passed units required)
+    TOTAL_DEGREE_UNITS = 32 # As per user's input
+
+    # Calculate current GPA based on all attempted units
+    total_grade_points_attempted = sum(c.grade for c in attempted_courses_data)
+    current_gpa = total_grade_points_attempted / num_attempted_units if num_attempted_units > 0 else 0.0
+
+    # Calculate remaining units (passed units still needed)
+    remaining_units = TOTAL_DEGREE_UNITS - num_passed_units
+    if remaining_units < 0:
+        remaining_units = 0
+
+    # Calculate maximum possible GPA
+    # Sum of grades from already passed units (grade >= 4)
+    total_grade_points_passed = sum(c.grade for c in attempted_courses_data if c.grade >= 4)
+
+    # Number of units that still need to be passed to reach TOTAL_DEGREE_UNITS
+    units_to_pass_for_degree = TOTAL_DEGREE_UNITS - num_passed_units
+    if units_to_pass_for_degree < 0:
+        units_to_pass_for_degree = 0
+
+    # The total number of units that will contribute to the final GPA is the sum of attempted units
+    # plus the number of units still needed to pass to reach the degree requirement.
+    # This ensures the denominator for max_possible_gpa is correct.
+    total_units_for_max_gpa_calc = num_attempted_units + units_to_pass_for_degree
+
+    max_possible_total_grade_points = total_grade_points_attempted + (units_to_pass_for_degree * 7)
+    max_possible_gpa = max_possible_total_grade_points / total_units_for_max_gpa_calc if total_units_for_max_gpa_calc > 0 else 0.0
 
     return jsonify({
-        "completed_courses": completed_courses,
-        "total_courses": 32,  # Hardcode to match TOTAL_UNITS_FOR_DEGREE
-        "gpa": round(gpa, 2)
+        "current_gpa": round(current_gpa, 2),
+        "max_possible_gpa": round(max_possible_gpa, 2),
+        "completed_units": num_passed_units, # This is now passed units
+        "attempted_units": num_attempted_units, # New field for all units with a grade
+        "remaining_units": remaining_units, # Remaining units to pass
+        "total_degree_units": TOTAL_DEGREE_UNITS # Total passed units required for degree
     })
+
+@app.route("/api/save_user_answer", methods=['POST'])
+def save_user_answer():
+    data = request.get_json()
+    if not data or 'question_id' not in data or 'user_input' not in data or 'is_correct' not in data:
+        return jsonify({"message": "Missing question_id, user_input, or is_correct"}), 400
+    
+    try:
+        new_user_answer = UserAnswer(
+            question_id=data['question_id'],
+            user_input=data['user_input'],
+            is_correct=data['is_correct']
+        )
+        db.session.add(new_user_answer)
+        db.session.commit()
+        return jsonify({"message": "User answer saved successfully", "id": new_user_answer.id}), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"message": f"Error saving user answer: {str(e)}"}), 500
 
 @app.route("/api/debug_db")
 def debug_db():
     with app.app_context():
         return jsonify({"db_name": db.engine.url.database, "full_uri": str(db.engine.url)})
 
-@app.route("/api/test_ai", methods=['GET'])
-def test_ai():
+@app.route("/api/get_saved_questions", methods=['GET'])
+def get_saved_questions():
+    course_id = request.args.get('course_id')
+    
+    query = GeneratedQuestion.query
+    if course_id:
+        query = query.filter_by(course_id=course_id)
+    
+    questions = query.order_by(GeneratedQuestion.generated_at.desc()).all()
+    
+    result = []
+    for q in questions:
+        question_data = q.to_dict()
+        user_answers = UserAnswer.query.filter_by(question_id=q.id).order_by(UserAnswer.answered_at.desc()).all()
+        question_data['user_answers'] = [ua.to_dict() for ua in user_answers]
+        
+        # Add course code and name
+        course = Course.query.get(q.course_id)
+        if course:
+            question_data['course_code'] = course.code
+            question_data['course_name'] = course.name
+        else:
+            question_data['course_code'] = 'N/A'
+            question_data['course_name'] = 'N/A'
+            
+        result.append(question_data)
+        
+    return jsonify(saved_questions=result)
+
+@app.route('/api/extract_text_from_pdf', methods=['POST'])
+def extract_text_from_pdf():
+    if 'file' not in request.files:
+        return jsonify({"message": "No file part"}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"message": "No selected file"}), 400
+    if not file.filename.lower().endswith('.pdf'):
+        return jsonify({"message": "Invalid file type. Please upload a PDF"}), 400
+
     try:
-        response = openai.Completion.create(
-            model="text-davinci-003",
-            prompt="Generate a sample question about machine learning.",
-            max_tokens=50
-        )
-        return jsonify({"response": response.choices[0].text.strip()})
+        pdf_document = fitz.open(stream=file.read(), filetype="pdf")
+        full_text = ""
+        for page_num in range(pdf_document.page_count):
+            page = pdf_document.load_page(page_num)
+            full_text += page.get_text()
+        return jsonify({"text": full_text}), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"message": f"Error processing PDF: {str(e)}"}), 500
 
 @app.route("/api/generate_practice", methods=['POST'])
 def generate_practice():
     data = request.get_json()
-    if not data or 'course_id' not in data or 'type' not in data:
-        return jsonify({"message": "Missing course_id or type"}), 400
+    if not data or 'course_id' not in data or 'type' not in data or 'question_type' not in data:
+        return jsonify({"message": "Missing course_id, type, or question_type"}), 400
+    
+    question_type = data['question_type']
     
     course = Course.query.get(data['course_id'])
     if not course:
@@ -392,26 +539,125 @@ def generate_practice():
     num_items = data.get('num_items', 5)  # Default to 5 items
     
     try:
-        response = client.chat.completions.create(  # Use client instance
-            model="gpt-3.5-turbo",  # Updated to chat model
+        response = client.chat.completions.create(
+            model="grok-3",
             messages=[
                 {"role": "system", "content": "You are an advanced educational AI assistant for the augmentED platform, designed to help students learn efficiently. Your role is to generate accurate, concise, and relevant educational content based on provided course materials. Always return responses in valid JSON format, using clear field names (e.g., 'question', 'answer' for exams, 'front', 'back' for flashcards). If the output is not JSON-compatible, include an 'error' field with a description. Prioritize content relevance to the given course and end all responses with '###'."},
-                {"role": "user", "content": f"{content}. Generate {num_items} {data['type']} items. Return the response as a valid JSON array of objects, where each object has 'question' and 'answer' fields for exams, or 'front' and 'back' fields for flashcards. Example: [{{\"question\": \"What is ML?\", \"answer\": \"Machine Learning\"}}]."}
+                {"role": "user", "content": f"""
+{content}. Generate {num_items} {data['type']} items.
+Return the response as a valid JSON array of objects.
+
+If type is 'exam' and question_type is 'free_text', each object should have 'question', 'answer', and 'working' fields.
+Example: {json.dumps([{"question": "What is ML?", "answer": "Machine Learning", "working": "ML is a field of AI that uses statistical techniques to give computer systems the ability to learn from data."}])}
+
+If type is 'exam' and question_type is 'multiple_choice', each object should have 'question', 'choices' (an array of strings), 'answer' (the correct choice), and 'working' fields.
+Example: {json.dumps([{"question": "What is the capital of France?", "choices": ["Berlin", "Madrid", "Paris", "Rome"], "answer": "Paris", "working": "Paris is the capital and most populous city of France."}])}
+
+If type is 'exam' and question_type is 'numerical', each object should have 'question', 'numerical_answer' (a number), 'tolerance' (a number for acceptable deviation, e.g., 0 for exact match), 'answer' (string representation of numerical_answer), and 'working' fields.
+Example: {json.dumps([{"question": "What is 2 + 2?", "numerical_answer": 4, "tolerance": 0, "answer": "4", "working": "2 + 2 = 4"}])}
+
+If type is 'flashcard', each object should have 'front', 'back', and 'working' fields.
+Example: {json.dumps([{"front": "What is ML?", "back": "Machine Learning", "working": "ML is a field of AI that uses statistical techniques to give computer systems the ability to learn from data."}])}
+"""}
             ],
-            max_tokens=300,
+            max_tokens=2000,
             temperature=0.7
         )
-        result = response.choices[0].message.content.strip()  # Access content from response
+        result = response.choices[0].message.content.strip().replace('###', '')
+        print(f"Raw AI response: {result}") # Debugging line
         try:
             items = json.loads(result) if result.startswith('[') else [{"error": "Invalid AI response format"}]
+
+            # Save generated questions to the database
+            saved_items = []
+            for item_data in items:
+                if "error" in item_data: # Skip items with errors
+                    saved_items.append(item_data)
+                    continue
+
+                if data['type'] == 'exam':
+                    new_question = GeneratedQuestion(
+                        course_id=course.id,
+                        question_type=question_type,
+                        question_text=item_data.get('question'),
+                        correct_answer=item_data.get('answer'),
+                        working=item_data.get('working'),
+                        choices=item_data.get('choices'),
+                        numerical_answer=item_data.get('numerical_answer'),
+                        tolerance=item_data.get('tolerance')
+                    )
+                elif data['type'] == 'flashcard':
+                    new_question = GeneratedQuestion(
+                        course_id=course.id,
+                        question_type='free_text', # Flashcards are essentially free text
+                        question_text=item_data.get('front'),
+                        correct_answer=item_data.get('back'),
+                        working=item_data.get('working')
+                    )
+                db.session.add(new_question)
+                db.session.flush() # To get the ID for the newly added question
+                saved_items.append({**item_data, "id": new_question.id}) # Add the generated question ID
+            db.session.commit()
+
         except json.JSONDecodeError:
             items = [{"error": "Failed to parse AI-generated JSON"}]
+            saved_items = items # Assign to saved_items for consistent return
         return jsonify({
             "type": data['type'],
-            "items": items
+            "items": saved_items
         })
     except Exception as e:
         return jsonify({"message": f"AI error: {str(e)}"}), 500
+
+
+def extract_text_from_file(file):
+    if not file:
+        return None, "No file provided"
+    if file.filename == '':
+        return None, "No selected file"
+    if not file.filename.lower().endswith('.pdf'):
+        return None, "Invalid file type. Please upload a PDF"
+    try:
+        pdf_document = fitz.open(stream=file.read(), filetype="pdf")
+        full_text = ""
+        for page_num in range(pdf_document.page_count):
+            page = pdf_document.load_page(page_num)
+            full_text += page.get_text()
+        return full_text, None
+    except Exception as e:
+        return None, f"Error processing PDF: {str(e)}"
+
+@app.route("/api/grade_assessment", methods=['POST'])
+def grade_assessment():
+    if 'rubric' not in request.files or 'assessment' not in request.files:
+        return jsonify({"message": "Both 'rubric' and 'assessment' files are required"}), 400
+
+    rubric_file = request.files['rubric']
+    assessment_file = request.files['assessment']
+
+    rubric_text, error = extract_text_from_file(rubric_file)
+    if error:
+        return jsonify({"message": f"Error with rubric file: {error}"}), 400
+
+    assessment_text, error = extract_text_from_file(assessment_file)
+    if error:
+        return jsonify({"message": f"Error with assessment file: {error}"}), 400
+
+    try:
+        response = client.chat.completions.create(
+            model="grok-3",
+            messages=[
+                {"role": "system", "content": "You are an AI assistant that grades student assessments based on a provided rubric. The output should be a JSON object with two keys: 'overallPoints' and 'markedRubric'. The 'overallPoints' should be a string representing the total score (e.g., '85/100'). The 'markedRubric' should be an array of objects, where each object represents a criterion from the rubric. Each criterion object should have the following keys: 'criterion' (the name of the criterion), 'points' (the points awarded for that criterion, e.g., '20/25'), 'feedback' (general feedback for that criterion), 'specificExample' (a specific example from the student's assessment to support the feedback), 'improvement' (a suggestion for improvement), and 'loss' (an explanation of why points were lost)."},
+                {"role": "user", "content": f"Here is the rubric:\n\n{rubric_text}\n\nHere is the student's assessment:\n\n{assessment_text}"}
+            ],
+            max_tokens=2000,
+            temperature=0.7
+        )
+        result = response.choices[0].message.content.strip()
+        return jsonify(json.loads(result))
+    except Exception as e:
+        return jsonify({"message": f"AI error: {str(e)}"}), 500
+
 
 if __name__ == '__main__':
     app.run(debug=True)

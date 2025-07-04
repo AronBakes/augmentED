@@ -22,7 +22,7 @@ ChartJS.register(
 );
 
 // --- Component for the GPA Trend Chart (Now with Trendline) ---
-function GpaTrendChart({ courses, trendlineData }) { // Receives trendline data as a prop
+function GpaTrendChart({ courses, trendlineData, primaryColor, secondaryColor }) { // Receives trendline data as a prop
   const [chartData, setChartData] = useState(null);
 
   useEffect(() => {
@@ -51,8 +51,8 @@ function GpaTrendChart({ courses, trendlineData }) { // Receives trendline data 
           type: 'line', // Specify chart type
           label: 'GPA per Semester',
           data: sortedData.map(d => d.gpa),
-          borderColor: 'rgb(75, 192, 192)',
-          backgroundColor: 'rgba(75, 192, 192, 0.2)',
+          borderColor: primaryColor,
+          backgroundColor: primaryColor.replace('rgb', 'rgba').replace(')', ', 0.2)'),
           fill: true,
           tension: 0.1,
         },
@@ -62,13 +62,13 @@ function GpaTrendChart({ courses, trendlineData }) { // Receives trendline data 
           label: 'Performance Trend',
           data: trendlineData,
           fill: false,
-          borderColor: 'rgba(255, 99, 132, 0.8)',
+          borderColor: secondaryColor,
           borderDash: [5, 5], // Makes the line dashed
           pointRadius: 0, // No dots on the trendline
         }
       ],
     });
-  }, [courses, trendlineData]); // Re-render if courses or trendline changes
+  }, [courses, trendlineData, primaryColor, secondaryColor]); // Re-render if courses or trendline changes
 
   return (
     <Card bg="dark" text="white" className="mb-4">
@@ -85,7 +85,9 @@ function AnalyticsPage() {
   const [courses, setCourses] = useState([]);
   // --- NEW: State for our trendline data points ---
   const [trendlineData, setTrendlineData] = useState([]);
-  
+  const [primaryColor, setPrimaryColor] = useState(localStorage.getItem('primaryColor') || 'rgb(75, 192, 192)');
+  const [secondaryColor, setSecondaryColor] = useState(localStorage.getItem('secondaryColor') || 'rgba(255, 99, 132, 0.8)');
+
   useEffect(() => {
     const fetchAndProcessData = async () => {
       try {
@@ -114,6 +116,17 @@ function AnalyticsPage() {
       } catch (error) { console.error("Error fetching data:", error); }
     };
     fetchAndProcessData();
+
+    const handleStorageChange = () => {
+      setPrimaryColor(localStorage.getItem('primaryColor') || 'rgb(75, 192, 192)');
+      setSecondaryColor(localStorage.getItem('secondaryColor') || 'rgba(255, 99, 132, 0.8)');
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+    };
+
   }, []);
 
   return (
@@ -121,8 +134,8 @@ function AnalyticsPage() {
       <h2 className="mb-4">Your Academic Analytics</h2>
       <Row>
         <Col>
-          {/* Pass the calculated trendline data to the chart component */}
-          <GpaTrendChart courses={courses} trendlineData={trendlineData} />
+          {/* Pass the calculated trendline data and colors to the chart component */}
+          <GpaTrendChart courses={courses} trendlineData={trendlineData} primaryColor={primaryColor} secondaryColor={secondaryColor} />
         </Col>
       </Row>
       <Row>
